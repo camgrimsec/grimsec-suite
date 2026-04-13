@@ -1,0 +1,105 @@
+---
+description: GRIMSEC DevSecOps Agent Suite — 12-agent security analysis platform. Master index explaining all agents and when each triggers.
+alwaysApply: false
+---
+
+# GRIMSEC DevSecOps Agent Suite
+
+12 specialized security agents covering the complete DevSecOps lifecycle. Each agent auto-activates based on trigger phrases — just describe what you want in natural language.
+
+## Agent Index
+
+| # | Agent | File | Triggers On |
+|---|-------|------|-------------|
+| 1 | **Repo Analyzer** | `grimsec-repo-analyzer.mdc` | "analyze this repo", "security scan", "vulnerability assessment", "threat model", "DevSecOps analysis" |
+| 2 | **CI/CD Auditor** | `grimsec-cicd-auditor.mdc` | "audit GitHub Actions", "CI/CD security", "workflow security", "supply chain attack" |
+| 3 | **Vuln Enricher** | `grimsec-vuln-enricher.mdc` | "look up CVE", "enrich vulnerabilities", "EPSS score", "CISA KEV", "ATT&CK mapping" |
+| 4 | **Doc Intel** | `grimsec-doc-intel.mdc` | "analyze documentation", "product context", "security architecture", "validate finding" |
+| 5 | **Threat Monitor** | `grimsec-threat-monitor.mdc` | "new CVEs", "monitor vulnerabilities", "threat intel", "exposure check" |
+| 6 | **Executive Reporter** | `grimsec-executive-reporter.mdc` | "executive report", "security ROI", "risk quantification", "compliance mapping", "CISO report" |
+| 7 | **DAST Scanner** | `grimsec-dast-scanner.mdc` | "DAST", "dynamic testing", "ZAP scan", "Nuclei scan", "web app security testing" |
+| 8 | **Exploit Validator** | `grimsec-exploit-validator.mdc` | "exploit validation", "PoC generation", "prove exploitability", "validate finding" |
+| 9 | **Code Understanding** | `grimsec-code-understanding.mdc` | "map attack surface", "trace dataflow", "hunt variants", "explain framework security" |
+| 10 | **IaC Policy** | `grimsec-iac-policy.mdc` | "scan IaC", "Checkov", "OPA policy", "CIS benchmark", "Terraform security", "K8s security" |
+| 11 | **Forensics** | `grimsec-forensics.mdc` | "investigate repo", "forensic analysis", "supply chain compromise", "package backdoored" |
+| 12 | **Adversary Sim** | `grimsec-adversary-sim.mdc` | "adversary simulation", "red team", "penetration testing", "kill chain", "ATT&CK mapping" |
+
+## Standard Pipeline Flow
+
+```
+Repo Analyzer (1)
+  ├── CI/CD Auditor (2)      — audit the pipeline
+  ├── Vuln Enricher (3)      — enrich CVEs with EPSS/KEV/ATT&CK
+  ├── Doc Intel (4)          — validate findings against docs
+  ├── Threat Monitor (5)     — continuous exposure monitoring
+  ├── DAST Scanner (7)       — runtime testing
+  ├── Exploit Validator (8)  — prove high-risk findings
+  ├── Code Understanding (9) — deep code analysis
+  ├── IaC Policy (10)        — infrastructure compliance
+  ├── Forensics (11)         — supply chain investigation
+  └── Adversary Sim (12)     — red team simulation
+          │
+          ▼
+  Executive Reporter (6)     — board/CISO-level report
+```
+
+## Output Convention
+
+All analysis artifacts are written to `./grimsec-output/` relative to your project root:
+
+```
+grimsec-output/
+├── {repo-name}/             # Per-repo analysis (Agents 1-5, 7-10)
+│   ├── inventory.json
+│   ├── app-context.json
+│   ├── scan-results/
+│   ├── reachability-analysis.json
+│   ├── remediation.json
+│   └── assessment-report.md
+├── threat-intel/            # Agent 5 output
+├── executive/               # Agent 6 output
+├── exploit-validation/      # Agent 8 output
+├── code-understanding/      # Agent 9 output
+├── iac-policy/              # Agent 10 output
+├── forensics/               # Agent 11 output
+└── adversary-simulation/    # Agent 12 output
+```
+
+## Quick Start Examples
+
+```
+# Full repo scan
+"Analyze https://github.com/org/repo for security vulnerabilities"
+
+# CI/CD audit only
+"Audit the GitHub Actions workflows in this repo"
+
+# CVE enrichment
+"Look up CVE-2024-1234 and check if it's in CISA KEV"
+
+# Documentation analysis
+"Build a security context profile from this repo's documentation"
+
+# Threat monitoring
+"Check if any repos we've analyzed are exposed to new CVEs from the past week"
+
+# DAST
+"Run a DAST scan against https://staging.example.com — I have authorization"
+
+# IaC compliance
+"Scan the Terraform and Kubernetes files for security issues, map to CIS benchmarks"
+
+# Forensics
+"Investigate https://github.com/org/suspicious-package for supply chain compromise"
+```
+
+## Agent Chaining
+
+Agents are designed to chain. Each produces structured JSON that the next agent reads:
+
+1. Run **Repo Analyzer** → produces `inventory.json`, `reachability-analysis.json`
+2. Run **Vuln Enricher** on the findings → adds EPSS, CISA KEV, ATT&CK context
+3. Run **Exploit Validator** on RRS ≥ 7 findings → proves exploitability
+4. Run **Executive Reporter** → consumes all outputs → board-ready report
+
+For individual files, see the `.cursor/rules/` directory.

@@ -1,0 +1,176 @@
+---
+description: Dynamic Application Security Testing (DAST) using Nuclei and OWASP ZAP for runtime vulnerability detection on running web applications. Performs target discovery, Nuclei quick scan, ZAP deep scan, finding correlation, and unified DAST report generation.
+trigger: DAST, dynamic testing, black-box scan, web application security, ZAP scan, Nuclei scan, OWASP testing, runtime vulnerabilities, live target scan, web app pentest
+alwaysApply: false
+---
+
+# DAST Scanner
+
+Performs runtime vulnerability detection on running web applications using Nuclei and OWASP ZAP. Detects OWASP Top 10 vulnerabilities that static analysis misses.
+
+## When to Use
+
+- The user provides a target URL or Docker Compose file to security-test
+- Dynamic (black-box) testing of a running application is needed
+- Detecting OWASP Top 10 vulnerabilities at runtime
+- Chaining after `grimsec-repo-analyzer` has deployed the target app
+- Nuclei scans, ZAP scans, or combined DAST reports are requested
+
+## ⚠️ IMPORTANT: Authorization Required
+
+**Never run active scans against production systems without explicit authorization.** Always confirm scope with the user before executing full or API scan modes.
+
+ZAP active scans are loud and will appear in access logs.
+
+## Pipeline Overview
+
+```
+Phase 1: Environment Setup + Target Discovery (httpx)
+Phase 2: Nuclei Quick Scan (CVE templates, misconfigs, exposures)
+Phase 3: ZAP Deep Scan (spider/crawl, active scan, passive scan)
+Phase 4: Finding Correlation (deduplicate, map to CWE/OWASP)
+Phase 5: Report Generation (unified dast-report.md)
+```
+
+## Severity Mapping
+
+| Severity | Finding Types |
+|----------|--------------|
+| CRITICAL | RCE, confirmed SQL injection, authentication bypass |
+| HIGH | Stored XSS, SSRF, path traversal, IDOR, reflected XSS with DOM sink |
+| MEDIUM | Missing CSP/HSTS headers, CORS misconfiguration, information disclosure |
+| LOW | Cookie without Secure/HttpOnly flags, clickjacking, version disclosure |
+
+## Phase 1 — Environment Setup
+
+Check tool availability:
+```bash
+which nuclei && nuclei -version
+docker image inspect ghcr.io/zaproxy/zaproxy:stable >/dev/null 2>&1
+```
+
+Install Nuclei if missing:
+```bash
+# macOS/Linux
+curl -fsSL https://raw.githubusercontent.com/projectdiscovery/nuclei/main/install.sh | bash
+# Or via Go
+go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+```
+
+Pull ZAP Docker image:
+```bash
+docker pull ghcr.io/zaproxy/zaproxy:stable
+```
+
+Install httpx for target discovery:
+```bash
+go install github.com/projectdiscovery/httpx/cmd/httpx@latest
+```
+
+Create output directory:
+```bash
+mkdir -p dast-results
+```
+
+## Phase 2 — Target Discovery
+
+```bash
+httpx -u <TARGET_URL> -tech-detect -status-code -title -json -o dast-results/httpx.json
+```
+
+Review detected technologies — use them to select Nuclei template categories.
+
+## Phase 3 — Nuclei Quick Scan
+
+```bash
+nuclei -u <TARGET_URL> \
+  -t cves,misconfiguration,exposures,technologies,default-logins \
+  -severity critical,high,medium \
+  -json-export dast-results/nuclei.json \
+  -rate-limit 100 \
+  -timeout 300
+```
+
+**Template categories by tech stack:**
+- Web frameworks (Django, Rails, Laravel): use `cves`, `exposures`, `technologies`
+- Admin panels: use `default-logins`, `exposures`
+- APIs: use `misconfiguration`, `cves`
+
+Review CRITICAL/HIGH findings immediately — they may warrant escalation before ZAP completes.
+
+## Phase 4 — ZAP Deep Scan
+
+**ZAP scan modes:**
+- `baseline` — fast passive scan (CI/CD safe, ~2 min)
+- `full` — active + passive scan (comprehensive, ~20–60 min)
+- `api` — OpenAPI/SOAP/GraphQL-aware scan
+
+```bash
+# Baseline scan (safe for any environment)
+docker run -t ghcr.io/zaproxy/zaproxy:stable \
+  zap-baseline.py -t <TARGET_URL> \
+  -J dast-results/zap-baseline.json
+
+# Full active scan (requires explicit authorization)
+docker run -t ghcr.io/zaproxy/zaproxy:stable \
+  zap-full-scan.py -t <TARGET_URL> \
+  -J dast-results/zap-full.json
+
+# API scan with OpenAPI spec
+docker run -t ghcr.io/zaproxy/zaproxy:stable \
+  zap-api-scan.py -t <TARGET_URL> \
+  -f openapi -s \
+  -J dast-results/zap-api.json
+```
+
+**For authenticated scans**, add login configuration:
+```bash
+docker run -t ghcr.io/zaproxy/zaproxy:stable \
+  zap-full-scan.py -t <TARGET_URL> \
+  --hook /path/to/auth-hook.py \
+  -J dast-results/zap-full.json
+```
+
+## Phase 5 — Finding Correlation
+
+1. Load both `dast-results/nuclei.json` and `dast-results/zap.json`
+2. Deduplicate by matching: same host + port + path + vulnerability class (CWE)
+3. For each deduplicated finding, assign:
+   - `cwe_id` (e.g., CWE-89 for SQLi, CWE-79 for XSS)
+   - `owasp_category` (e.g., A03:2021 — Injection)
+   - `unified_severity` (use the higher of the two tool ratings)
+   - `source_tools` list
+
+## Phase 6 — Report Generation
+
+Produce `dast-results/dast-report.md` with:
+- Executive summary (total count by severity, top 3 critical findings)
+- Finding table sorted by severity
+- Per-finding details: endpoint, method, evidence, CWE, OWASP category
+- Remediation recommendations
+- Recommended immediate actions
+
+## Inputs
+
+| Input | Required |
+|-------|----------|
+| `TARGET_URL` | Yes |
+| `inventory.json` from grimsec-repo-analyzer | No (auto-discovers) |
+| OpenAPI spec | No (enables API scan mode) |
+| Auth credentials | No (enables authenticated scan) |
+
+## Output Files
+
+| File | Description |
+|------|-------------|
+| `dast-results/nuclei.json` | Raw + parsed Nuclei findings |
+| `dast-results/zap.json` | Raw + parsed ZAP findings |
+| `dast-results/dast-report.md` | Unified DAST report |
+| `dast-results/httpx.json` | Target discovery metadata |
+
+## Tips
+
+- Rate-limit Nuclei against fragile or production-adjacent targets: `--rate-limit 25`
+- If target is only accessible via Docker internal networking, use `--network host`
+- Nuclei template updates pull from the internet — use `--offline-mode` in air-gapped environments
+- ZAP active scans against APIs: pass `--openapi-spec path/to/openapi.yaml` for better coverage

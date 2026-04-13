@@ -1,0 +1,196 @@
+---
+description: Deep documentation analysis to build a product context profile for validating and enriching security vulnerability findings. Examines security architecture, deployment configs, authentication models, sandboxing, encryption, API surfaces, and audit logging to adjust scanner risk scores based on documented controls.
+trigger: analyze documentation, product context, security architecture, doc intelligence, vulnerability context, scanner false positive, validate finding, security controls documented, deployment security, doc analysis
+alwaysApply: false
+---
+
+# Documentation Intelligence Agent
+
+**Core principle:** A scanner finding is a hypothesis. Documentation is the evidence that confirms, upgrades, or downgrades it. Never treat a scanner finding as ground truth until you have read the application's own security documentation.
+
+## When to Use
+
+- Build a product context profile before writing security findings
+- Validate whether scanner-flagged vulnerabilities are mitigated by the application's own security controls
+- Adjust raw scanner risk scores based on documented architecture
+- Understand authentication model, sandboxing, network isolation, encryption before making claims about risk
+- Prepare security PRs that acknowledge existing mitigations (more likely to be accepted)
+
+## 8-Phase Documentation Intelligence Sweep
+
+### Phase 1: Repository Surface Scan
+
+Inventory every documentation source before reading any of them:
+
+| File/Path | Purpose |
+|---|---|
+| `README.md` | Product overview, deployment notes |
+| `SECURITY.md` | Vulnerability disclosure policy, security model |
+| `/docs/` directory | Deep documentation tree |
+| `CONTRIBUTING.md` | Dev setup, architecture overview |
+| `CHANGELOG.md` | Recent security fixes, version cadence |
+| `.env.example` / `.env.sample` | Configuration surface, secret names |
+| `Dockerfile` / `docker-compose.yml` | Container security baseline |
+| `helm/` / `charts/` | Kubernetes deployment security |
+| `terraform/` / `infra/` | Infrastructure security |
+| `openapi.yaml` / `swagger.json` | API surface definition |
+
+**Flag as finding if missing:**
+- No `SECURITY.md` → "No vulnerability disclosure policy"
+- No `.env.example` → "Secret surface area undocumented"
+- No deployment docs → "Security deployment guidance absent"
+
+### Phase 2: Product Identity
+
+Extract from README and top-level docs:
+1. Product description (in the product's own words)
+2. Target audience (developers, enterprises, consumers, platform engineers)
+3. Deployment models (SaaS, self-hosted Docker, K8s, CLI, library)
+4. Pricing model (open-source, open-core, enterprise tiers)
+5. Maturity indicators (stars, contributors, release cadence, last commit)
+
+Self-hosted tools for platform engineers have a very different threat model than SaaS products for consumers.
+
+### Phase 3: Architecture & Runtime
+
+Extract from code, Dockerfiles, docker-compose, and docs:
+- Tech stack: languages, frameworks (backend + frontend), major libraries
+- Runtime: Docker, Kubernetes, bare metal, serverless, Lambda
+- Service architecture: monolith, microservices, workers, serverless functions
+- Database layer: type, ORM, connection pooling
+- Caching layer: Redis, Memcached, in-memory
+- Queue/worker system: BullMQ, Celery, SQS, Kafka
+- External dependencies: cloud providers, third-party APIs, CDNs
+
+### Phase 4: Security Architecture (Critical Phase)
+
+Missing a security control leads to false-positive findings.
+
+**4.1 Authentication**
+- Mechanism: JWT, OAuth2, SAML, LDAP, API keys, magic links
+- Token storage: cookies (httpOnly/Secure flags?), localStorage, server-side sessions
+- Token expiry, refresh logic, MFA support
+
+**4.2 Authorization**
+- Model: RBAC, ABAC, CASL, Casbin, OPA
+- Scope: per-resource, per-workspace, per-organization
+
+**4.3 Encryption**
+- At-rest: database-level, application-level, field-level, disk encryption
+- In-transit: TLS enforced vs. recommended vs. absent
+- Key management: application-managed, KMS, HashiCorp Vault
+
+**4.4 Sandboxing & Isolation**
+Look specifically for: NSJAIL, seccomp profiles, AppArmor/SELinux, container isolation (non-root USER, read-only filesystem, dropped capabilities), VM isolation.
+
+Document what's **available**, what's **enabled by default**, and what requires opt-in.
+
+**4.5 Network Controls**
+- VPC / network segmentation, security groups
+- Kubernetes NetworkPolicy
+- WAF, DDoS protection, IP allowlisting
+
+**4.6 Audit Logging**
+- Events logged (auth, admin actions, data access)
+- Where logs go (file, database, SIEM, cloud logging)
+- Tamper protection (append-only, signed logs)
+
+**4.7 Input Validation**
+- Validation library (Zod, Joi, Pydantic, class-validator)
+- Where validation occurs (edge, controller, service layer)
+- SQL injection prevention (parameterized queries, ORM usage)
+
+### Phase 5: Deployment Security
+
+**Dockerfile checks:**
+- USER directive (non-root required)
+- Base image (pinned digest vs. floating tag)
+- Multi-stage builds (reduces attack surface)
+- Secrets in ENV or ARG (anti-pattern)
+
+**Docker Compose checks:**
+- `privileged: true` (red flag)
+- `cap_add: SYS_ADMIN / NET_ADMIN`
+- `read_only: true` (security positive)
+- Service network isolation
+
+**Kubernetes / Helm checks:**
+- `securityContext.runAsNonRoot`
+- `securityContext.readOnlyRootFilesystem`
+- `securityContext.allowPrivilegeEscalation: false`
+- `capabilities.drop: [ALL]`
+- NetworkPolicy resources
+- Resource limits
+
+**Terraform checks:**
+- `aws_security_group` with `0.0.0.0/0` on non-80/443 ports → CRITICAL
+- `aws_s3_bucket` public access blocks
+- `aws_rds_instance publicly_accessible`
+- `aws_lb` HTTP-only listeners
+- Encryption at rest settings
+
+### Phase 6: API Surface Analysis
+
+1. **Public endpoints** — enumerate all paths requiring no auth
+2. **Authenticated endpoints** — confirm auth middleware applied
+3. **Admin endpoints** — extra-privilege paths
+4. **File upload endpoints** — upload validation
+5. **Webhook receivers** — HMAC signature validation
+6. **GraphQL** — introspection enabled? depth limits?
+
+Common route patterns:
+- Express/Fastify: `router.get(`, `app.post(`
+- Flask/FastAPI: `@app.route(`, `@router.get(`
+- Rails: `routes.rb`
+- Go: `mux.HandleFunc(`, `r.GET(`
+
+### Phase 7: External Documentation Fetch
+
+Find the docs site URL in README, then fetch security-critical pages:
+- Self-hosting guide
+- Security hardening guide
+- Authentication configuration
+- Network/firewall requirements
+
+### Phase 8: Security Context Profile Generation
+
+**Output schema:**
+```json
+{
+  "product_context": {"name": "...", "deployment_models": [], "target_audience": []},
+  "architecture": {"languages": [], "frameworks": {}, "databases": []},
+  "security_controls": {
+    "authentication": [], "authorization": "...", "sandboxing": {},
+    "encryption": {"at_rest": "...", "in_transit": "..."},
+    "audit_logging": "true|false|partial"
+  },
+  "deployment_security": {"recommended_method": "...", "known_gaps": []},
+  "api_surface": {"public_endpoints": [], "admin_endpoints": [], "file_upload": false},
+  "vulnerability_context_adjustments": [
+    {
+      "finding_category": "...",
+      "adjustment": "DOWNGRADE|UPGRADE|CONFIRMED|NEEDS_MORE_INFO",
+      "from_risk": 7.0, "to_risk": 3.0,
+      "reason": "Application uses nsjail sandboxing that prevents filesystem access",
+      "evidence": "docs/security.md line 42, Dockerfile line 18"
+    }
+  ]
+}
+```
+
+**Adjustment decision logic:**
+- Documented control directly mitigates finding → DOWNGRADE (cite evidence)
+- App's own docs acknowledge the gap → CONFIRMED (do not downgrade)
+- Control exists but disabled by default → Partial DOWNGRADE (e.g., 7.0 → 5.5)
+- Documentation missing for relevant component → NEEDS_MORE_INFO
+
+**Output files:** `./grimsec-output/{repo-name}/doc-profile.json` and `doc-summary.md`
+
+## Quality Checks
+
+Before finalizing:
+- [ ] Every vulnerability adjustment has specific evidence reference (file:line or URL)
+- [ ] Missing documentation explicitly flagged, not silently ignored
+- [ ] Default vs. opt-in security controls clearly distinguished
+- [ ] External docs site has been checked if one exists
+- [ ] `doc-summary.md` can stand alone as human-readable security brief

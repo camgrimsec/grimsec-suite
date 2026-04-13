@@ -1,0 +1,208 @@
+---
+description: Orchestrates controlled adversary simulation to convert static vulnerability findings into evidence-backed attack narratives. Covers rules of engagement, reconnaissance, controlled exploitation (with human approval), post-exploitation impact, MITRE ATT&CK mapping, and executive simulation reports. Reads EXPLOITABLE findings from exploit-validator.
+trigger: adversary simulation, red team, penetration testing, attack simulation, kill chain, ATT&CK mapping, post-exploitation, exploit chain, pentest, adversary emulation, attack narrative
+alwaysApply: false
+---
+
+# Adversary Simulation Agent
+
+Orchestrates controlled adversary simulation, converting static vulnerability findings into evidence-backed attack narratives.
+
+## ⚠️ CRITICAL SAFETY CONSTRAINTS — READ FIRST
+
+These constraints are non-negotiable:
+
+- **NEVER** run against production systems without **explicit written authorization** (signed RoE document)
+- **NEVER** exfiltrate real user data — demonstrate *capability* of access only, capture metadata/proof
+- **NEVER** perform denial-of-service attacks of any kind
+- **NEVER** modify production data, configurations, databases, or infrastructure
+- **ALL** exploitation must occur in isolated test environments or explicitly authorized lab setups
+- **Human approval required** before any Phase 3 (Exploitation) begins — present the plan and wait for explicit `APPROVE`
+- **Emergency stop**: run `./redamon.sh down` to immediately terminate all simulation activity
+- **Scope creep**: if recon discovers out-of-scope assets, log them and halt
+
+## When to Use
+
+- Run a full adversary simulation or red team exercise
+- Convert exploit-validation findings into proven attack narratives
+- Map discovered vulnerabilities to MITRE ATT&CK techniques
+- Produce executive-ready simulation report with kill-chain evidence
+- Assess post-exploitation impact (lateral movement, privilege escalation, data access)
+- Generate rules of engagement for an upcoming pentest
+
+## Input Files
+
+| File | Source | Purpose |
+|------|--------|---------|
+| `exploit-validation/validation-report.json` | exploit-validator | EXPLOITABLE findings as seed attacks |
+| `code-understanding/context-map.json` | code-understanding | Attack surface topology |
+| `app-context.json` | grimsec-repo-analyzer | Data flows and trust boundaries |
+| `doc-profile.json` | doc-intel | Security controls to test against |
+
+Filter `validation-report.json` to entries where `status == "EXPLOITABLE"`.
+
+## Pipeline
+
+```
+Phase 1: Rules of Engagement
+Phase 2: Reconnaissance                 ← Passive/active recon
+Phase 3: Exploitation                   ← HUMAN APPROVAL REQUIRED
+Phase 4: Post-Exploitation
+Phase 5: MITRE ATT&CK Mapping
+Phase 6: Report Generation
+```
+
+## Phase 1: Rules of Engagement
+
+Before ANY testing, document the authorized scope:
+
+```json
+{
+  "engagement_id": "<uuid>",
+  "authorized_by": "<name, title>",
+  "authorization_date": "<ISO8601>",
+  "scope": {
+    "targets": ["10.0.0.0/24", "staging.example.com"],
+    "in_scope_ports": [80, 443, 8080],
+    "in_scope_services": ["web", "api"],
+    "out_of_scope": ["production databases", "user PII", "payment systems"],
+    "exclusions": ["10.0.0.1 (core router)", "prod-db-01"]
+  },
+  "time_window": {"start": "<ISO8601>", "end": "<ISO8601>", "timezone": "UTC"},
+  "contacts": {
+    "security_lead": "<email>",
+    "system_owner": "<email>",
+    "emergency_stop": "<phone>"
+  },
+  "constraints": {
+    "no_dos": true,
+    "no_data_exfil": true,
+    "no_production_writes": true,
+    "human_approval_required": true
+  }
+}
+```
+
+**STOP**: Present `roe.json` to user for review. Do NOT proceed to Phase 2 until user confirms.
+
+**Save:** `adversary-simulation/roe.json`
+
+## Phase 2: Reconnaissance
+
+```bash
+# Subdomain discovery + DNS enumeration
+nmap -sn <target-range> -oJ recon/hosts.json
+
+# Port scanning + service detection
+nmap -sV -p 1-1000 <target> -oJ recon/ports.json
+
+# HTTP probing + tech fingerprinting
+httpx -l recon/hosts.txt -tech-detect -status-code -json -o recon/http-hosts.json
+
+# Nuclei vulnerability templates
+nuclei -l recon/http-hosts.txt -t cves,misconfiguration,exposures -severity medium,high,critical -json-export recon/nuclei-results.json
+```
+
+Cross-reference Nuclei findings against `validation-report.json` EXPLOITABLE items — flag matches as high-priority attack hypotheses.
+
+**Save:** `adversary-simulation/recon-results.json`
+
+## Phase 3: Exploitation
+
+### Pre-Exploitation Checklist (MANDATORY)
+
+Before executing ANY exploit:
+- [ ] `roe.json` is signed and on file
+- [ ] Current time is within authorized window
+- [ ] Target confirmed to be in-scope
+- [ ] User has explicitly typed `APPROVE` in response to the exploitation plan
+
+### Tool Selection Per Finding Type
+
+| Vulnerability Class | Tool |
+|--------------------|------|
+| CVE exploitation | Metasploit (`msfconsole -x "use <module>; set RHOSTS <target>; run"`) |
+| Credential attacks | Hydra (`hydra -L users.txt -P wordlist.txt <target> <service>`) |
+| SQL injection | SQLMap (`sqlmap -u <url> --level 3 --risk 2 --batch`) |
+| SSRF | Manual request crafting with Burp/curl |
+| Container escape | Manual privilege escalation sequence |
+
+Log every step with timestamps and evidence.
+
+**Save:** `adversary-simulation/exploitation-log.json`
+
+## Phase 4: Post-Exploitation
+
+After successful exploitation, assess real-world impact:
+
+**Lateral Movement:**
+- Can the compromised service reach internal databases?
+- Can it reach other microservices not exposed externally?
+- What internal APIs are accessible?
+
+**Privilege Escalation:**
+- Can the process escalate to root/admin?
+- Can a container escape to the host?
+- Are there writable sudoers/cron/SUID binaries?
+
+**Data Access Assessment:**
+- What sensitive data is reachable from the compromised context?
+- Enumerate accessible S3 buckets, databases, secrets managers
+- Record **metadata only** (table names, bucket names, secret ARNs) — **DO NOT read actual user data**
+
+**Persistence Capability:**
+- Could an attacker drop a backdoor? (test capability only, do not install)
+- Are there cron slots, webhook endpoints, or config injection points?
+
+**Save:** `adversary-simulation/post-exploitation-findings.json`
+
+## Phase 5: MITRE ATT&CK Mapping
+
+For each action in the exploitation log, assign:
+- ATT&CK Tactic (e.g., `Initial Access`)
+- ATT&CK Technique ID (e.g., `T1190`)
+- Sub-technique if applicable (e.g., `T1190.001`)
+- Evidence pointer (log line)
+
+Build attack tree:
+```
+Initial Access (T1190)
+  └── Execution (T1059)
+        └── Persistence (T1078)
+              └── Privilege Escalation (T1611)
+                    └── Collection (T1005)
+                          └── Exfiltration (T1048)
+```
+
+Identify ATT&CK coverage gaps — which phases from the full matrix were NOT tested?
+
+**Save:** `adversary-simulation/attack-mapping.json`
+
+## Phase 6: Report Generation
+
+Generate `adversary-simulation/simulation-report.md` with:
+- **Attack Narrative**: Plain-English story of "an attacker who found your public repo could..."
+- **Kill Chain**: Step-by-step with evidence references
+- **Impact Matrix**: What was accessed, what could be damaged, blast radius
+- **MITRE ATT&CK Heat Map**: Which techniques fired
+- **Static vs. Actual comparison**: Predicted risk score vs. proven exploitation result
+- **Remediation Priority**: Fix the first link in the chain = break the whole chain
+- **Time-to-Compromise metric**: How long did the full simulation take?
+
+## Output Files
+
+| File | Description |
+|------|-------------|
+| `adversary-simulation/roe.json` | Signed rules of engagement |
+| `adversary-simulation/recon-results.json` | Attack surface map |
+| `adversary-simulation/exploitation-log.json` | Full exploitation audit trail |
+| `adversary-simulation/post-exploitation-findings.json` | Impact assessment |
+| `adversary-simulation/attack-mapping.json` | MITRE ATT&CK mapping |
+| `adversary-simulation/simulation-report.md` | Executive narrative report |
+
+## Error Handling
+
+- **Out-of-scope target detected**: STOP immediately, log the target, update RoE before continuing
+- **Exploitation produces unexpected system impact**: invoke emergency stop, notify contacts in `roe.json`
+- **EXPLOITABLE finding not reproducible**: mark as `UNCONFIRMED` in exploitation log
+- **Human approval not received within 30 minutes**: timeout and halt Phase 3

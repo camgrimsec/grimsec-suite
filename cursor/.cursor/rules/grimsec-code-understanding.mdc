@@ -1,0 +1,195 @@
+---
+description: Adversarial code comprehension for security analysis. Maps attack surfaces, traces data flows from source to sink, hunts for vulnerability variants, and explains the security model of frameworks. Four modes: --map (attack surface), --trace (data flow), --hunt (variant hunting), --teach (framework security).
+trigger: map attack surface, trace dataflow, hunt variants, explain framework security, code understanding, entry points, dangerous sinks, taint analysis, understand code, code comprehension, data flow analysis, variant hunting
+alwaysApply: false
+---
+
+# Code Understanding Agent
+
+Adversarial code comprehension for the DevSecOps suite. Four analysis modes targeting different aspects of security-relevant code analysis.
+
+## When to Use
+
+- Map the attack surface of a codebase (entry points, trust boundaries, sinks)
+- Trace a specific data flow from user input to a dangerous operation
+- Hunt for variants of a known vulnerability pattern across a codebase
+- Explain the security model or common pitfalls of a framework or library
+- Perform any command prefixed with `--map`, `--trace`, `--hunt`, or `--teach`
+
+## Mode 1: `--map` (Attack Surface Mapping)
+
+**Trigger:** Map attack surface, enumerate entry points, understand where application receives external input.
+
+### Steps
+
+1. **Enumerate all entry points** — every location where external, attacker-controlled data enters:
+   - HTTP route handlers (REST, GraphQL, WebSocket, SSE)
+   - CLI argument parsers
+   - File upload handlers and multipart form processors
+   - Webhook receivers
+   - Message queue consumers (Kafka, RabbitMQ, SQS, NATS, Redis Streams)
+   - Environment variable readers at startup
+   - gRPC service implementations
+   - Cron/scheduled jobs that read external data
+   - IPC sockets and named pipes
+
+2. **Identify trust boundaries** for each entry point:
+   - `external→app`: unauthenticated internet traffic
+   - `app→db`: application to data store
+   - `service→service`: internal microservice calls
+   - `authenticated` vs `unauthenticated`
+   - `admin` vs `user` privilege levels
+
+3. **Catalog dangerous sinks** — locations where data is consumed in a dangerous way:
+   - Raw SQL query construction
+   - OS command / shell execution
+   - File path construction from user input
+   - Template rendering without autoescaping
+   - Deserialization of untrusted data
+   - Cryptographic operations with user-controlled parameters
+   - Outbound network calls with user-influenced URL (SSRF)
+
+4. **Map unchecked flows** — for each entry point, check if path to dangerous sink exists:
+   - `UNCHECKED`: no validation found between entry point and sink
+   - `PARTIAL`: some validation present but potentially bypassable
+   - `SANITIZED`: validation appears sufficient (document what mechanism)
+
+**Output:** `./code-understanding/context-map.json` + human-readable table: Entry Point → Trust Boundary → Sink → Status
+
+**Common entry point patterns by framework:**
+```
+# Express/Fastify
+router.get('/:id', (req, res) => req.params.id  ← entry point
+app.post('/search', (req, res) => req.body.query  ← entry point
+
+# Flask/FastAPI
+@app.route('/search')
+def search(): request.args.get('q')  ← entry point
+
+# Go
+r.GET("/user/:id", func(c *gin.Context) { c.Param("id")  ← entry point
+```
+
+---
+
+## Mode 2: `--trace` (Data Flow Tracing)
+
+**Trigger:** Trace a specific data flow, follow user input through code, perform taint analysis.
+
+### Steps
+
+1. **Select the entry point** (e.g., `POST /api/query`, `handleUpload()`, CLI flag `--config`)
+
+2. **Trace hop-by-hop** — follow data through every function call, transformation, and branch. Record at each hop:
+   - Function name and `file:line`
+   - Variable name(s) carrying the tainted value
+   - Whether attacker fully controls, partially controls, or cannot control the value
+   - Any validation, sanitization, or encoding applied
+   - Whether the sanitization is sufficient or bypassable
+
+3. **Identify taint propagation:**
+   - String concatenation, interpolation, format strings → **taint propagates**
+   - Parameterized queries, allowlist checks, type coercion to integer → **taint blocked**
+   - Base64 encode/decode, URL encode/decode → **taint propagates** (encoding ≠ sanitization)
+   - JSON.stringify of a primitive → **may break taint depending on context**
+
+4. **Document branch conditions** — record every `if`/`switch`/`match` affecting whether tainted data reaches the sink. State precisely what conditions must hold (exploit preconditions).
+
+5. **Classify the flow:**
+   - `EXPLOITABLE`: tainted data reaches sink without sufficient sanitization
+   - `CONDITIONAL`: reaches sink only under specific conditions (document them)
+   - `BLOCKED`: sanitization is sufficient — document why
+   - `UNCLEAR`: insufficient information — document what's missing
+
+**Output:** `./code-understanding/flow-traces/flow-trace-{id}.json`  
+Inline summary: `Entry → hop1 → hop2 → ... → Sink [STATUS]`
+
+---
+
+## Mode 3: `--hunt` (Variant Hunting)
+
+**Trigger:** Find variants of a vulnerability, look for similar bugs, check if a CVE pattern appears elsewhere.
+
+### Steps
+
+1. **Characterize the seed vulnerability:**
+   - Vulnerability class (SQLi, SSRF, path traversal, command injection)
+   - The specific coding construct (e.g., string concatenation in SQL)
+   - Known bypass techniques or edge cases
+
+2. **Structural search** — find all literal pattern matches:
+   - Same function calls, same variable flow, same sink type
+   - Use grep + AST awareness where possible
+   - Record every match with `file:line` and code snippet
+
+3. **Semantic search** — find functionally equivalent code:
+   - Different function names, different frameworks — same vulnerability class
+   - Aliases and wrappers (custom DB helpers that internally do raw queries)
+   - Indirect sinks (data stored in DB, then read and executed elsewhere)
+
+4. **Root cause analysis** — identify the underlying pattern shared by all variants:
+   - Missing abstraction (devs bypassed ORM for "performance")
+   - Trust assumption mismatch (treating internal service input as safe)
+   - Incomplete allowlist (one path sanitized, sister paths missed)
+
+5. **Risk-rank each variant:**
+   - `CRITICAL`: direct exploitability, no auth required
+   - `HIGH`: exploitable with authentication or minor conditions
+   - `MEDIUM`: exploitable but constrained
+   - `LOW`: pattern present but likely mitigated
+
+**Output:** `./code-understanding/variants.json` + inline table: `File:Line | Snippet | Class | Risk`
+
+---
+
+## Mode 4: `--teach` (Framework Security Explanation)
+
+**Trigger:** Explain how a framework/library works from a security perspective.
+
+### Steps
+
+1. Identify the framework/library, version, and language ecosystem
+
+2. **Explain the security model:**
+   - What security guarantees does the framework make by default?
+   - What must the developer do explicitly to be secure?
+   - Where does the framework's security model break down?
+
+3. **Common pitfalls** — top 5–10 ways developers misuse this framework:
+   - Name the pitfall
+   - Show vulnerable code example
+   - Show secure alternative
+
+4. **Framework-specific vulnerabilities** — list CVEs or well-known vulnerability classes with root cause explanations
+
+5. **Safe usage patterns** — concise, copy-paste-ready guidance for the most dangerous operations
+
+**Output:** Inline markdown explanation (no JSON output)
+
+---
+
+## Output File Conventions
+
+| Mode | Output Path | Format |
+|------|-------------|--------|
+| `--map` | `code-understanding/context-map.json` | JSON |
+| `--trace` | `code-understanding/flow-traces/flow-trace-{id}.json` | JSON |
+| `--hunt` | `code-understanding/variants.json` | JSON |
+| `--teach` | inline only | Markdown |
+
+## Quality Standards
+
+- Always cite `file:line` for every finding
+- Do not speculate — if you cannot determine a flow with certainty, classify it `UNCLEAR` and document what's missing
+- For `--map` and `--trace`, prefer reading actual code over making assumptions
+- For `--hunt`, cast a wide net first (structural), then narrow semantically
+- For `--teach`, ground explanations in real CVEs and documented pitfalls
+
+## Invocation Examples
+
+```
+--map ./src/                           # map the full attack surface
+--trace "POST /api/query"              # trace a specific route
+--hunt "SQL injection via fmt.Sprintf" # hunt for variants of a known pattern
+--teach "ClickHouse Go client"         # explain security model of a library
+```

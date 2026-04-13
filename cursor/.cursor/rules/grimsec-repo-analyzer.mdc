@@ -1,0 +1,196 @@
+---
+description: End-to-end DevSecOps security analysis on any GitHub repository. Runs a 6-stage pipeline covering repo ingestion, STRIDE threat modeling, multi-tool vulnerability scanning (SAST/SCA/secrets/IaC), reachability analysis with Real Risk Scores, remediation recommendations, and structured assessment report.
+trigger: analyze repo security, security scan, vulnerability assessment, threat model, DevSecOps analysis, audit codebase, check project for security issues, devsecops, SAST, SCA scan
+alwaysApply: false
+---
+
+# DevSecOps Repo Analyzer
+
+A 6-stage security analysis pipeline with **contextual vulnerability analysis** — instead of dumping hundreds of CVEs, it determines which vulnerabilities are actually reachable and exploitable in the specific application context.
+
+## When to Use
+
+- Analyze a GitHub repository for security vulnerabilities
+- Run a DevSecOps assessment on a codebase
+- Threat model an application
+- Audit an open-source project's security posture
+- Check dependencies for known vulnerabilities with real-world context
+- Assess actual risk of vulnerability findings (not just CVSS scores)
+
+## Prerequisites
+
+Install required scanning tools before starting:
+
+```bash
+# Install Semgrep, Trivy, Grype, Gitleaks, Snyk CLI
+pip install semgrep
+brew install trivy grype gitleaks  # or use package manager for your OS
+npm install -g snyk
+```
+
+**Snyk authentication:** Set `SNYK_TOKEN` env var or run `snyk auth`. Snyk is skipped gracefully if unauthenticated.
+
+## Pipeline Overview
+
+```
+Stage 1: Repo Scout ──► Stage 2: App Context ──► Stage 3: Vulnerability Scan
+                                                          │
+                                                          ▼
+Stage 6: Report ◄── Stage 5: Remediation ◄── Stage 4: Reachability Analysis
+```
+
+Output goes to `./grimsec-output/{repo-name}/`.
+
+## Stage 1: Repo Scout & Ingestion
+
+**Goal:** Clone the repo and build a complete inventory.
+
+```bash
+gh repo clone {owner/repo} ./grimsec-output/{repo-name}/source/ -- --depth=1
+# Or:
+git clone --depth=1 {repo-url} ./grimsec-output/{repo-name}/source/
+```
+
+Inventory includes: languages (file counts + LOC), package managers, infrastructure files (Dockerfiles, IaC, CI/CD configs), codebase metrics, README summary.
+
+**Output:** `./grimsec-output/{repo-name}/inventory.json`
+
+## Stage 2: Application Context & Threat Model
+
+**Goal:** Classify the application type and build a STRIDE threat model.
+
+**Application types:**
+| Type | Indicators |
+|------|-----------| 
+| Web Application | Frontend frameworks, serves HTML, has routes/pages |
+| API Service | REST/GraphQL endpoints, no frontend, returns JSON |
+| CLI Tool | Argument parsers (argparse, cobra, clap), binary entry point |
+| Library/SDK | Published as package, exports functions, no standalone entry point |
+| Integration Platform | Connects services, webhook handlers, queue consumers |
+| Infrastructure Tool | Manages servers/containers, has IaC definitions |
+
+**Map data flows:**
+- Entry points: HTTP endpoints, CLI args, file uploads, webhooks, message queues, env vars
+- Processing: validation, transformation, business logic, database queries
+- Storage: databases, filesystems, caches, external services
+- Exit points: API responses, emails, third-party calls, logs
+
+**STRIDE analysis per trust boundary:**
+- **S**poofing: Can identity be faked at entry points?
+- **T**ampering: Can data be modified in transit or at rest?
+- **R**epudiation: Can actions be performed without audit trails?
+- **I**nformation Disclosure: Can sensitive data leak through errors/logs?
+- **D**enial of Service: Can resources be exhausted through input manipulation?
+- **E**levation of Privilege: Can a low-privilege user gain higher access?
+
+**Output:** `./grimsec-output/{repo-name}/app-context.json`
+
+## Stage 3: Vulnerability Scanning
+
+**Scan depths:**
+- **Quick:** Trivy (SCA) + Gitleaks (secrets)
+- **Standard (default):** Quick + Semgrep (SAST) + Trivy IaC + Snyk SCA
+- **Deep:** Standard + Semgrep extended rulesets + Grype (cross-validation)
+
+```bash
+# SCA
+trivy fs ./source/ --format json --output scan-results/trivy-sca.json
+
+# Secrets
+gitleaks detect --source ./source/ --report-format json --report-path scan-results/gitleaks.json
+
+# SAST
+semgrep --config p/default --config p/security-audit --json --output scan-results/semgrep.json ./source/
+
+# IaC
+trivy config ./source/ --format json --output scan-results/trivy-iac.json
+
+# SCA with Snyk
+snyk test --json > scan-results/snyk-sca.json
+```
+
+**Output:** `./grimsec-output/{repo-name}/scan-results/`
+
+## Stage 4: Reachability & Context Analysis
+
+**Goal:** For each High/Critical finding, determine if it's actually exploitable. This transforms noise into signal.
+
+**Real Risk Score (1-10):**
+| Score | Meaning | Criteria |
+|-------|---------|----------|
+| 9-10 | Critical | Reachable from unauthenticated external input + high impact + no mitigating controls |
+| 7-8 | High | Reachable but requires authentication or specific conditions |
+| 5-6 | Medium | Theoretically reachable but significant barriers exist |
+| 3-4 | Low | Vulnerable code exists but unreachable in practice |
+| 1-2 | Noise | Dead code, test-only, or completely mitigated |
+
+**For each SCA finding:**
+1. Identify the vulnerable function/method
+2. Search the codebase — is that function imported and called?
+3. Trace call chain: can it be reached from an external entry point?
+4. Check input constraints: is input validated before reaching vulnerable code?
+
+**For each SAST finding:**
+1. Read flagged code + surrounding ±50 lines context
+2. Trace data flow: where does the tainted input come from?
+3. Check for sanitization between input source and vulnerable sink
+
+**For each secrets finding:**
+1. Check if it's a real credential or test/example value
+2. Check if it's in a file that should be gitignored
+3. Assess: what access does this secret grant?
+
+**Output:** `./grimsec-output/{repo-name}/reachability-analysis.json`
+
+## Stage 5: Remediation Recommendations
+
+For findings with Real Risk Score ≥ 7, generate specific fix recommendations:
+
+- **Dependency vulns:** Minimum fix version, breaking change check, interim code mitigations, specific file edits
+- **Code vulns:** Specific code fix matching project's code style, before/after blocks
+- **Secrets:** Rotation steps, .gitignore additions, git history cleanup (BFG/git-filter-repo)
+- **IaC:** Corrected configuration with security rationale and CIS benchmark reference
+
+**PR mode** (if user requests): fork → branch `security/fix-{cve-id}` → apply fix → commit `fix(security): remediate {CVE-ID} in {component}` → PR
+
+**Output:** `./grimsec-output/{repo-name}/remediation.json`
+
+## Stage 6: Assessment Report
+
+Report sections:
+1. **Executive Summary**: Application type, scan date, key metrics, overall risk posture
+2. **Application Profile**: App type, tech stack, architecture overview
+3. **Threat Model Summary**: Top STRIDE threats mapped to actual findings
+4. **Findings Overview**: All findings sorted by Real Risk Score (descending)
+5. **Critical & High Risk (Score ≥ 7)**: Detailed analysis, exploitation scenarios, remediation
+6. **Noise Analysis**: Before/after comparison (raw scanner output vs. contextualized)
+7. **Remediation Roadmap**: Prioritized fixes with effort estimates
+8. **Appendix**: Full scanner outputs, methodology notes
+
+**Output:** `./grimsec-output/{repo-name}/assessment-report.md`
+
+## Output Structure
+
+```
+grimsec-output/{repo-name}/
+├── source/                      # Cloned repository
+├── inventory.json               # Stage 1
+├── app-context.json             # Stage 2
+├── scan-results/                # Stage 3
+│   ├── trivy-sca.json
+│   ├── gitleaks.json
+│   ├── semgrep.json
+│   ├── trivy-iac.json
+│   ├── snyk-sca.json
+│   └── summary.json
+├── reachability-analysis.json   # Stage 4
+├── remediation.json             # Stage 5
+└── assessment-report.md         # Stage 6
+```
+
+## Important Notes
+
+- **Verify before claiming.** When assessing reachability, always check the actual code. Never assume a function is or isn't called — search for evidence and cite specific files/lines.
+- **Err on caution with Real Risk Scores.** If uncertain whether a vulnerability is reachable, score higher and note the uncertainty.
+- **Secrets in public repos are compromised.** Always recommend rotation regardless of whether the secret appears to be a test value.
+- **Be respectful.** When analyzing public repos, position findings as collaborative contributions. PRs should be professional and genuinely helpful.

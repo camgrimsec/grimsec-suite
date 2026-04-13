@@ -1,0 +1,170 @@
+---
+description: Audits GitHub Actions CI/CD workflow files for supply chain and pipeline security risks. Detects unpinned third-party actions, expression injection, overly permissive permissions, dangerous triggers (pull_request_target, workflow_run PPE), secrets exposure, and self-hosted runner risks.
+trigger: audit GitHub Actions, CI/CD security, workflow security, pipeline security, supply chain attack, expression injection, pull_request_target, pinned actions, workflow hardening, CICD audit, github actions review
+alwaysApply: false
+---
+
+# CI/CD Pipeline Security Auditor
+
+Structured 6-category security audit against all GitHub Actions workflow files. Covers the same risk categories exploited in real-world supply chain attacks, including the tj-actions/changed-files incident (CVE-2025-30066).
+
+## When to Use
+
+- Audit or review GitHub Actions workflow files
+- Scan `.github/workflows/` for security risks
+- Detect supply chain attack vectors in CI/CD pipelines
+- Find expression injection / script injection vulnerabilities
+- Check for dangerous triggers like `pull_request_target`
+- Assess pipeline permission hygiene
+- Investigate Poisoned Pipeline Execution (PPE) vulnerability
+
+## Instructions
+
+### Step 1 – Locate Workflow Files
+
+```bash
+find /path/to/repo/.github/workflows -name "*.yml" -o -name "*.yaml"
+# Or clone first:
+git clone https://github.com/owner/repo /tmp/target-repo
+```
+
+If no `.github/workflows/` directory exists, report no workflows found and stop.
+
+### Step 2 – Run Audit
+
+```bash
+pip install -q pyyaml
+```
+
+Parse each workflow file and check against the 6 categories below.
+
+### Step 3 – Severity Scale
+
+| Severity | Meaning |
+|----------|---------|
+| CRITICAL | Immediate supply chain or code execution risk |
+| HIGH | Exploitable with moderate attacker access |
+| MEDIUM | Defense-in-depth gap, should be fixed |
+| LOW | Best practice deviation |
+
+### Step 4 – Prioritization Order
+
+1. CRITICAL unpinned third-party actions (direct supply chain vector)
+2. HIGH expression injection (direct code execution via PR title/body)
+3. HIGH dangerous triggers with checkout (PPE attack surface)
+4. HIGH secrets exposure
+5. MEDIUM permissions hygiene
+6. MEDIUM self-hosted runners
+7. MEDIUM GitHub-owned unpinned actions
+
+## 6-Category Check Reference
+
+### Category 1: Unpinned Third-Party Actions (CRITICAL/MEDIUM)
+
+- Detection: `uses:` value contains `@` followed by non-SHA ref (tag, branch name)
+- SHA pattern: exactly 40 hex characters
+- Third-party (not `actions/` or `github/`) → CRITICAL
+- GitHub-owned (`actions/`, `github/`) → MEDIUM
+
+```yaml
+# VULNERABLE — tag-pinned
+- uses: tj-actions/changed-files@v44
+
+# SAFE — SHA-pinned
+- uses: tj-actions/changed-files@d6babd6899969df1a11d14c368283ea4436bca78 # v44
+```
+
+### Category 2: Expression Injection (HIGH)
+
+- Detection: `run:` block contains `${{` with user-controlled context values
+- Dangerous contexts: `github.event.pull_request.title`, `github.event.pull_request.body`, `github.event.issue.title`, `github.event.comment.body`, `github.head_ref`, `github.event.inputs.*`
+
+```yaml
+# VULNERABLE
+- run: echo "${{ github.event.pull_request.title }}"
+
+# SAFE — pass via env var
+- env:
+    PR_TITLE: ${{ github.event.pull_request.title }}
+  run: echo "$PR_TITLE"
+```
+
+### Category 3: Overly Permissive Permissions (MEDIUM)
+
+- `permissions: write-all` → MEDIUM
+- No `permissions:` key at workflow or job level → MEDIUM
+
+```yaml
+# SAFE — least-privilege example
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+```
+
+### Category 4: Dangerous Triggers (HIGH/MEDIUM)
+
+- `pull_request_target` with checkout of PR head → HIGH
+- `pull_request_target` alone → MEDIUM
+- `workflow_run` with checkout of triggering PR code → HIGH
+
+```yaml
+# VULNERABLE — pull_request_target + checkout of PR head
+on:
+  pull_request_target:
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+# SAFER — use pull_request instead
+on:
+  pull_request:
+```
+
+### Category 5: Secrets Exposure (HIGH/MEDIUM)
+
+- Secrets as CLI args in `run:` block: `${{ secrets.` not inside `env:` → HIGH
+- `ACTIONS_RUNNER_DEBUG: true` in env → MEDIUM
+- Secrets in step names or echo commands → HIGH
+
+### Category 6: Self-Hosted Runners (MEDIUM/HIGH)
+
+- `runs-on: self-hosted` or `runs-on: [self-hosted, ...]` → MEDIUM
+- Combined with `pull_request_target` or untrusted code execution → HIGH
+
+## Output Format
+
+```json
+{
+  "repo": "owner/repo",
+  "scan_timestamp": "ISO-8601",
+  "workflow_count": 5,
+  "total_findings": 23,
+  "by_severity": {"CRITICAL": 3, "HIGH": 8, "MEDIUM": 10, "LOW": 2},
+  "findings": [
+    {
+      "id": "CICD-001",
+      "category": "unpinned_action",
+      "workflow_file": ".github/workflows/ci.yml",
+      "line": 12,
+      "current": "uses: tj-actions/changed-files@v44",
+      "recommended": "uses: tj-actions/changed-files@d6babd6899969df1a11d14c368283ea4436bca78 # v44",
+      "reference": "https://github.com/advisories/GHSA-mrrh-fwg8-r2c3"
+    }
+  ]
+}
+```
+
+## References
+
+- [GitHub Actions Security Hardening Guide](https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions)
+- [CVE-2025-30066 — tj-actions/changed-files](https://github.com/advisories/GHSA-mrrh-fwg8-r2c3)
+- [Poisoned Pipeline Execution (Cider Security)](https://www.cidersecurity.io/blog/research/ppe-poisoned-pipeline-execution/)
+
+## GRIMSEC Integration
+
+Run after `grimsec-repo-analyzer` to cover the CI/CD attack surface that SCA/SAST tools miss. Feed CRITICAL findings into `grimsec-vuln-enricher` if CVE IDs are associated.

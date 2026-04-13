@@ -1,0 +1,248 @@
+---
+description: Evidence-backed forensic investigation of open-source GitHub repositories. Investigates supply chain incidents, suspicious commits, compromised maintainer accounts, backdoor injections, and open-source security incidents. Five phases: evidence collection, IOC extraction, timeline reconstruction, hypothesis formation, and forensic report.
+trigger: investigate repo, forensic analysis, supply chain compromise, package backdoored, suspicious maintainer, oss forensics, malicious commit, supply chain incident, GitHub repo investigation, IOC analysis
+alwaysApply: false
+---
+
+# OSS Forensics Agent
+
+Evidence-backed forensic investigation of open-source GitHub repositories.
+
+## When to Use
+
+- Investigate a GitHub repository for supply chain compromise
+- Analyze suspicious commit history or maintainer behavior
+- Determine if a package was backdoored
+- Reconstruct the timeline of a security incident
+- Assess whether a dependency in `inventory.json` is compromised
+- Follow up on findings from `grimsec-cicd-auditor`
+
+## Investigator Rules
+
+1. **Evidence first, conclusions second.** Never assert a hypothesis without citing evidence.
+2. **Cite sources.** Every claim must include the source (API endpoint, commit SHA, Wayback URL).
+3. **Preserve evidence.** Save raw API responses before summarizing. Deleted content is itself evidence.
+4. **Note absence.** If expected evidence is missing (e.g., no PR for a release), document that gap.
+5. **Timestamp everything.** All events in UTC.
+6. **Never modify the repo.** Clone bare (`--bare`), never push.
+7. **Confidence honesty.** LOW confidence is better than unfounded HIGH confidence.
+
+## Pipeline
+
+```
+Input: GitHub repo URL + investigation prompt
+  │
+  ├─► Phase 1: Evidence Collection
+  ├─► Phase 2: IOC Extraction
+  ├─► Phase 3: Timeline Reconstruction
+  ├─► Phase 4: Hypothesis Formation & Verification
+  └─► Phase 5: Forensic Report
+```
+
+## Phase 1: Evidence Collection
+
+### GitHub REST API v3
+
+Set `GITHUB_TOKEN` env var for authenticated requests (avoids rate limits).
+
+```bash
+# Repo metadata
+GET /repos/{owner}/{repo}
+
+# Recent commit history
+GET /repos/{owner}/{repo}/commits?per_page=100
+
+# Pull requests (all states)
+GET /repos/{owner}/{repo}/pulls?state=all
+
+# All releases
+GET /repos/{owner}/{repo}/releases
+
+# Contributors + commit counts
+GET /repos/{owner}/{repo}/contributors
+
+# Current collaborators + permissions
+GET /repos/{owner}/{repo}/collaborators
+
+# Webhook configurations
+GET /repos/{owner}/{repo}/hooks
+
+# Deploy keys
+GET /repos/{owner}/{repo}/keys
+
+# Branch protection rules
+GET /repos/{owner}/{repo}/branches/{branch}/protection
+
+# Recent CI/CD workflow runs
+GET /repos/{owner}/{repo}/actions/runs?per_page=50
+```
+
+### Git History Analysis
+
+```bash
+git clone --bare https://github.com/{owner}/{repo}.git repo.git
+cd repo.git
+
+# Full history all branches
+git log --all --format="%H %ae %an %ai %s"
+
+# Files added per commit
+git log --all --diff-filter=A --name-only
+
+# Files deleted per commit
+git log --all --diff-filter=D --name-only
+
+# Force-push detection (reflog)
+git reflog --all
+
+# Orphaned/dangling commits
+git fsck --unreachable
+
+# Author/committer email mismatch (rebase/force-push indicator)
+git log --all --format="%H %ae %ce" | awk '$2 != $3'
+```
+
+**Flag commits where:**
+- Author email ≠ committer email
+- Commit timestamp falls outside maintainer's historical timezone window
+- Commit modifies `.github/workflows/`, `package.json#scripts`, `setup.py`
+- Merge commits that bypass PR (no associated PR number in message)
+
+### Package Registry APIs
+
+```bash
+# npm
+curl https://registry.npmjs.org/{package}  # full publish history
+
+# PyPI
+curl https://pypi.org/pypi/{package}/json  # release history + file hashes
+
+# Go
+curl https://proxy.golang.org/{module}/@v/list  # available versions
+curl https://sum.golang.org/lookup/{module}@{version}  # hash verification
+```
+
+**Check for:**
+- Versions published in quick succession (< 1 hour apart)
+- Versions with new maintainer in `_npmUser` or `maintainers` array
+- Dist-tags moved to a different version than expected
+- Checksum mismatches vs. known-good versions
+
+### Wayback Machine
+
+```bash
+# CDX API — list all snapshots
+curl "https://web.archive.org/cdx/search/cdx?url={github_url}&output=json&fl=timestamp,statuscode,original&limit=200"
+
+# Fetch a specific snapshot
+curl "https://web.archive.org/web/{timestamp}/{original_url}"
+```
+
+Save all raw evidence to `forensics/evidence/`.
+
+## Phase 2: IOC Extraction
+
+**Code Obfuscation IOCs:**
+- `base64_decode`, `atob()`, `Buffer.from(x,'base64')`, `eval(Buffer.from(...))` in source
+- Hex-encoded strings: `\x68\x74\x74\x70` patterns
+- Long one-line minified additions to previously readable files
+- `exec()`, `subprocess.run()` in non-test code
+
+**Exfiltration IOCs:**
+- HTTP calls to domains not present in project documentation or previous commits
+- DNS exfiltration: constructing domains from environment variable content
+- `process.env` or `os.environ` values sent in request headers/body/URL
+- POST to webhook URLs (Discord, Slack, custom) not in project's legitimate use
+- Outbound connections in `postinstall`, `preinstall`, `prepare` scripts
+
+**Environment Access IOCs:**
+- `process.env.NPM_TOKEN`, `process.env.AWS_*`, `process.env.GH_TOKEN`
+- `os.environ['GITHUB_TOKEN']`, `os.environ['SECRET_*']`
+- Reading `~/.ssh/`, `~/.aws/credentials`, `~/.npmrc`
+
+**Behavioral IOCs:**
+- New collaborator added < 7 days before a suspicious commit
+- Force push to default branch
+- Release tag created without an associated merged PR
+- Branch protection disabled
+- CI workflow modified to `curl | bash` remote scripts
+- Workflow exfiltrating `secrets.*` to external services
+
+**Save:** `forensics/iocs.json`
+
+## Phase 3: Timeline Reconstruction
+
+Build chronological, correlated event timeline:
+
+Event sources to correlate:
+1. Git commits (timestamp, author, files changed)
+2. GitHub API events (collaborator additions, permission changes)
+3. Package registry publish timestamps, maintainer changes
+4. Wayback snapshots (when content changed or disappeared)
+5. Issue/PR timeline (vulnerability disclosures, incident reports)
+
+**Timeline rules:**
+- Use UTC timestamps throughout
+- Flag events where git commit time ≠ push time by > 24 hours (possible backdating)
+- Identify the **pivot point**: earliest event departing from normal behavior
+- Mark events as: `NORMAL`, `SUSPICIOUS`, `MALICIOUS`, `RESPONSE`, `UNKNOWN`
+
+**Save:** `forensics/timeline.json`
+
+## Phase 4: Hypothesis Formation & Verification
+
+Consider these hypotheses based on evidence:
+
+| Hypothesis | Key Evidence |
+|------------|-------------|
+| Compromised maintainer account | New SSH key added, account login from new location |
+| New malicious maintainer added | `MemberEvent` close to suspicious commit |
+| Build system compromise | CI/CD workflow modification, build artifact hash mismatch |
+| Dependency confusion / typosquatting | Package name similar to internal package |
+| Malicious PR merged | PR from external contributor with no review |
+| Insider threat | Known maintainer with documented grievance |
+
+For each hypothesis, document:
+- `confidence`: HIGH / MEDIUM / LOW
+- `supporting_evidence`: list with source and URL
+- `contradicting_evidence`: list with source
+- `verdict`: one-paragraph assessment
+
+**Confidence rules:**
+- `HIGH`: Multiple independent sources corroborate; no significant contradictions
+- `MEDIUM`: Some evidence supports; contradictions or gaps exist
+- `LOW`: Plausible but evidence is circumstantial or single-source
+
+**Save:** `forensics/hypotheses.json`
+
+## Phase 5: Forensic Report
+
+Report sections:
+1. **Executive Summary** — what happened, when, who was affected, severity
+2. **Repository Profile** — owner, stars, dependents, ecosystem role
+3. **Investigation Scope** — date range, sources examined, limitations
+4. **Timeline** — chronological table with classification labels
+5. **Indicators of Compromise** — IOC table with evidence links
+6. **Hypotheses** — each with confidence, supporting/contradicting evidence, verdict
+7. **Affected Versions** — table: Safe / Malicious / Unverified
+8. **Impact Assessment** — who was affected, what data/secrets at risk
+9. **Remediation** — versions to avoid, safe upgrade path, immediate actions (rotate secrets, audit logs)
+10. **Evidence Inventory** — all evidence files with sources and retrieval dates
+11. **Limitations & Caveats** — what could not be verified, deleted evidence
+
+**Save:** `forensics/forensic-report.md`
+
+## Output Structure
+
+```
+forensics/
+├── evidence/
+│   ├── github-api-{owner}-{repo}.json
+│   ├── commits-{sha-range}.json
+│   ├── wayback-snapshots.json
+│   └── registry-{pkg}-history.json
+├── iocs.json
+├── timeline.json
+├── hypotheses.json
+└── forensic-report.md
+```

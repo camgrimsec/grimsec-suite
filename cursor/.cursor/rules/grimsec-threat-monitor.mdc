@@ -1,0 +1,185 @@
+---
+description: Continuous threat intelligence monitoring. Monitors CISA KEV, OSV.dev, and NVD for newly disclosed CVEs and cross-references them against dependency inventories from previously analyzed repositories to detect exposure.
+trigger: threat intel, new CVEs, monitor vulnerabilities, check new threats, CVE monitoring, exposure check, threat briefing, CISA KEV update, new vulnerability disclosure, dependency exposure
+alwaysApply: false
+---
+
+# Threat Intel Monitor
+
+Monitors CISA KEV (Known Exploited Vulnerabilities), OSV.dev, and NVD for newly disclosed CVEs, then cross-references them against dependency inventories from analyzed repositories.
+
+## When to Use
+
+- Check for new high-severity CVEs or newly disclosed vulnerabilities
+- Monitor threat intelligence feeds (CISA KEV, OSV, NVD)
+- Determine if previously analyzed repos are exposed to new threats
+- Run a one-time exposure check against current dependency inventories
+- Get a threat intel briefing or exposure report
+
+## Three-Phase Pipeline
+
+```
+Phase 1: Threat Ingestion
+  └─ CISA KEV feed → filter by date
+  └─ OSV.dev batch API → query all monitored deps
+  └─ NVD API v2 → enrich critical findings
+
+Phase 2: Exposure Cross-Reference
+  └─ Load all inventory.json files from monitored repos
+  └─ Match CVE-affected packages against installed versions
+  └─ Classify: EXPOSED / POTENTIALLY_EXPOSED / NOT_AFFECTED
+
+Phase 3: Report Generation
+  └─ JSON threat intel report
+  └─ Markdown executive summary
+```
+
+## Instructions
+
+### Phase 1: Threat Ingestion
+
+**Download CISA KEV catalog:**
+```python
+import urllib.request, json
+
+kev_url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+with urllib.request.urlopen(kev_url) as r:
+    kev_data = json.loads(r.read())
+# kev_data['vulnerabilities'] is the list
+```
+
+**Query OSV.dev for a dependency:**
+```python
+def query_osv(package_name, ecosystem, version=None):
+    payload = {"package": {"name": package_name, "ecosystem": ecosystem}}
+    if version:
+        payload["version"] = version
+    url = "https://api.osv.dev/v1/query"
+    data = json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req) as r:
+        return json.loads(r.read())
+```
+
+**Query NVD for a CVE:**
+```python
+def query_nvd(cve_id):
+    url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?cveId={cve_id}"
+    with urllib.request.urlopen(url) as r:
+        return json.loads(r.read())
+```
+
+### Phase 2: Exposure Cross-Reference
+
+Load `inventory.json` files from `./grimsec-output/*/inventory.json`. For each dependency, query OSV.dev and check if the installed version falls within any affected range.
+
+**Lookback filtering:**
+```python
+from datetime import datetime, timedelta
+cutoff = datetime.utcnow() - timedelta(days=7)  # 7d lookback
+recent_kev = [v for v in kev_data['vulnerabilities'] 
+              if datetime.fromisoformat(v.get('dateAdded','2000-01-01')) >= cutoff]
+```
+
+### Exposure Status Values
+
+| Status | Meaning | Action Required |
+|--------|---------|----------------|
+| `EXPOSED` | Installed version within affected range | **Immediate** — patch or mitigate |
+| `POTENTIALLY_EXPOSED` | Version range could not be precisely determined | **Urgent** — manual verification |
+| `NOT_AFFECTED` | Installed version outside affected range | No action needed |
+
+### Threat Priority
+
+| Priority | Criteria |
+|----------|---------|
+| **P0 — CRITICAL** | CISA KEV + CRITICAL CVSS + ransomware use |
+| **P1 — HIGH** | CISA KEV + any severity, or CRITICAL CVSS without KEV |
+| **P2 — MEDIUM** | HIGH CVSS, not in KEV |
+| **P3 — LOW** | Medium/Low CVSS |
+
+Always treat CISA KEV entries as highest priority — these are actively exploited in the wild.
+
+### Phase 3: Report Output
+
+**Report JSON structure:**
+```json
+{
+  "generated_at": "ISO-8601",
+  "lookback_days": 7,
+  "summary": {
+    "total_new_threats": 15,
+    "threats_affecting_monitored_repos": 2,
+    "repos_with_exposure": 1,
+    "critical_exposures": 1,
+    "high_exposures": 1
+  },
+  "exposures": [
+    {
+      "repo": "my-repo",
+      "package": "express",
+      "version": "4.18.0",
+      "cve_id": "CVE-2024-XXXX",
+      "severity": "HIGH",
+      "status": "EXPOSED",
+      "fix_version": "4.18.3",
+      "in_kev": false
+    }
+  ]
+}
+```
+
+**Output files:**
+- `./grimsec-output/threat-intel/{date}-report.json`
+- `./grimsec-output/threat-intel/{date}-summary.md`
+
+## Supported Ecosystems
+
+| Ecosystem | Inventory Key | Lock File |
+|-----------|--------------|-----------|
+| npm / yarn | `npm` | package-lock.json, yarn.lock |
+| PyPI | `pip` | requirements.txt, Pipfile.lock |
+| Go | `go` | go.sum |
+| Maven | `maven` | pom.xml |
+| Cargo | `cargo` | Cargo.lock |
+| RubyGems | `rubygems` | Gemfile.lock |
+| NuGet | `nuget` | packages.lock.json |
+
+## Adding Repos to Monitoring
+
+Run `grimsec-repo-analyzer` on the repo — this produces `./grimsec-output/{repo-name}/inventory.json`, and the monitor automatically picks it up on the next run.
+
+**Manual minimal inventory:**
+```json
+{
+  "repo": "my-repo",
+  "analyzed_at": "2024-01-01T00:00:00Z",
+  "dependencies": {
+    "npm": [{"name": "express", "version": "4.18.2", "ecosystem": "npm"}],
+    "pip": [{"name": "django", "version": "4.2.0", "ecosystem": "PyPI"}]
+  }
+}
+```
+
+## Scheduled Monitoring
+
+For recurring monitoring, set up a cron job or scheduled task:
+```bash
+# Daily (6 AM UTC)
+0 6 * * * python /path/to/check-threats.py --lookback 1d --inventory-dir ./grimsec-output/ --output-dir ./grimsec-output/threat-intel/
+
+# Weekly (Monday 7 AM UTC)
+0 7 * * 1 python /path/to/check-threats.py --lookback 7d --inventory-dir ./grimsec-output/ --output-dir ./grimsec-output/threat-intel/
+```
+
+## GRIMSEC Integration
+
+```
+devsecops-repo-analyzer → inventory.json
+        │
+        ▼
+threat-intel-monitor ← (this agent)
+        │
+        ▼
+vulnerability-context-enricher → enriched CVE profiles
+```

@@ -1,0 +1,168 @@
+---
+description: Infrastructure-as-Code security scanning and policy enforcement using Checkov (750+ built-in policies) and Open Policy Agent (custom Rego policies). Covers Terraform, Kubernetes, Docker, CloudFormation, Ansible, and GitHub Actions. Generates SBOMs, maps to CIS/NIST/SOC2/HIPAA/PCI-DSS compliance frameworks.
+trigger: scan IaC, infrastructure security, Checkov, OPA policy, Rego, CIS benchmark, SOC2 IaC, NIST infrastructure, policy enforcement, SBOM generation, Dockerfile security, Kubernetes security, Terraform security, cloud security posture
+alwaysApply: false
+---
+
+# IaC Policy Agent
+
+Comprehensive Infrastructure-as-Code security scanning using Checkov (750+ built-in policies) and OPA (custom Rego policies). Covers all major IaC frameworks and maps findings to CIS, NIST 800-53, SOC 2, HIPAA, and PCI-DSS.
+
+## When to Use
+
+- Repository or directory contains IaC files needing security scanning
+- Checkov or OPA policy evaluation is requested
+- Compliance posture assessment against CIS Benchmarks, SOC 2, NIST, HIPAA, or PCI-DSS
+- SBOM generation from containers or filesystems
+- GitHub Actions workflows need security policy review
+- Docker or Kubernetes configurations need hardening review
+- Terraform infrastructure needs security validation
+
+## Setup
+
+```bash
+# Install Checkov
+pip install checkov
+
+# Install OPA
+brew install opa  # macOS
+# Or: curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static && chmod +x opa
+
+# Install conftest
+brew install conftest  # macOS
+
+# Install Syft (SBOM generation)
+curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+```
+
+## Phase 1: IaC Discovery
+
+Walk the repository tree for IaC files:
+
+| Framework | Patterns |
+|---|---|
+| Terraform | `*.tf`, `*.tfvars` |
+| CloudFormation | `template.yaml`, `template.json`, `*-stack.yaml` |
+| Kubernetes | `*deployment*.yaml`, `*service*.yaml`, Helm `Chart.yaml` |
+| Docker | `Dockerfile*`, `docker-compose*.yml` |
+| Ansible | `playbook*.yml`, `roles/*/tasks/main.yml` |
+| ARM Templates | `azuredeploy.json`, `*.arm.json` |
+| GitHub Actions | `.github/workflows/*.yml` |
+
+## Phase 2: Checkov Scan
+
+```bash
+# Scan entire repository (auto-detects frameworks)
+checkov -d <repo_path> --output json --output-file-path iac-policy/
+
+# Targeted scanning
+checkov -d <dir> --framework terraform --output json
+checkov -d <dir> --framework kubernetes --output json
+checkov -d <dir> --framework dockerfile --output json
+checkov -d <dir> --framework github_actions --output json
+```
+
+**Critical failures to flag immediately:**
+- `CKV_AWS_19` — S3 bucket not encrypted
+- `CKV_AWS_20` / `CKV_AWS_70` — S3 bucket publicly accessible
+- `CKV_AWS_9` — No MFA on root account
+- `CKV_AWS_24` / `CKV_AWS_25` — Unrestricted security groups
+- `CKV_AWS_17` / `CKV_AZURE_28` — Publicly accessible databases
+- `CKV2_GHA_1` — GitHub Actions workflow lacks permissions block
+
+## Phase 3: OPA Custom Policies
+
+**Docker policy rules:**
+- `deny_root_user`: USER directive must be present and non-root
+- `deny_unpinned_base`: Base image must use `@sha256:...` digest
+- `deny_secrets_in_env`: ENV/ARG keys must not match secret name patterns
+- `warn_no_multistage`: Single-stage builds flagged as warning
+- `warn_no_healthcheck`: Missing HEALTHCHECK flagged
+
+**Kubernetes policy rules:**
+- `deny_root_container`: `securityContext.runAsNonRoot: true` required
+- `deny_writable_root_fs`: `readOnlyRootFilesystem: true` required
+- `deny_privilege_escalation`: `allowPrivilegeEscalation: false` required
+- `deny_all_capabilities`: `capabilities.drop: ["ALL"]` required
+- `deny_no_limits`: CPU and memory limits required on all containers
+- `deny_host_network`: `hostNetwork`, `hostPID`, `hostIPC` must be false
+
+**Terraform policy rules:**
+- `deny_public_s3`: `aws_s3_bucket_public_access_block` with all true required
+- `deny_public_rds`: `publicly_accessible = false` required
+- `deny_unencrypted_rds`: `storage_encrypted = true` required
+- `deny_open_sg`: Security groups must not allow `0.0.0.0/0` on non-80/443 ports
+
+**GitHub Actions policy rules:**
+- `deny_unpinned_action`: Third-party actions must be pinned to full 40-char SHA
+- `deny_missing_permissions`: Workflow/job must have explicit `permissions:` block
+- `deny_expression_injection`: `${{ github.event.*}}` in `run:` steps flagged
+
+## Phase 4: SBOM Generation
+
+```bash
+# Filesystem SBOM
+syft dir:<repo_path> -o spdx-json > iac-policy/sbom/filesystem-sbom.spdx.json
+syft dir:<repo_path> -o cyclonedx-json > iac-policy/sbom/filesystem-sbom.cdx.json
+
+# Container image SBOM (if image is available locally)
+syft <image:tag> -o spdx-json > iac-policy/sbom/<image-name>-sbom.spdx.json
+```
+
+## Phase 5: Compliance Mapping
+
+For each failed Checkov check, map to compliance frameworks:
+
+**SOC 2 Type II mapping:**
+- No encryption at rest (CKV_AWS_19) → CC6.1 (Logical Access Controls) — FAIL
+- No audit logging → CC7.1 (System Monitoring) — FAIL
+
+**NIST 800-53 mapping:**
+- Unrestricted security groups → SC-7 (Boundary Protection) — FAIL
+- Publicly accessible databases → AC-3 (Access Enforcement) — FAIL
+
+Calculate per-framework pass rate: `(PASS controls) / (PASS + FAIL + PARTIAL) * 100`
+
+## Phase 6: Report Generation
+
+Console summary format:
+```
+IaC Policy Agent — Scan Complete
+=================================
+Frameworks scanned: Terraform, Kubernetes, Docker, GitHub Actions
+Checkov checks run: 847  |  Passed: 623  |  Failed: 224
+OPA violations:     37   |  Warnings: 12
+SBOM packages:      1,842
+Compliance coverage: CIS AWS 74% | SOC2 68% | NIST 71%
+
+Critical findings: 8 — see iac-policy/iac-report.md
+```
+
+Report sections:
+1. Executive summary (pass rates, critical finding count)
+2. IaC discovery summary table
+3. Checkov results by framework and severity
+4. OPA violation summary per policy domain
+5. SBOM summary
+6. Compliance framework heat map
+7. Top 10 critical findings with remediation steps
+8. Full findings appendix
+
+## Output Files
+
+| File | Description |
+|---|---|
+| `iac-policy/checkov-results.json` | Raw Checkov JSON output |
+| `iac-policy/opa-results.json` | OPA policy evaluation results |
+| `iac-policy/sbom/filesystem-sbom.spdx.json` | SPDX SBOM |
+| `iac-policy/sbom/filesystem-sbom.cdx.json` | CycloneDX SBOM |
+| `iac-policy/compliance-map.json` | Control-by-control compliance status |
+| `iac-policy/iac-report.md` | Full security report |
+
+## Error Handling
+
+| Situation | Action |
+|---|---|
+| No IaC files found | Report "No IaC files detected" and exit cleanly |
+| Checkov parse error on a file | Log the file, skip it, continue scanning |
+| Syft unavailable | Skip SBOM phase, note in report |
