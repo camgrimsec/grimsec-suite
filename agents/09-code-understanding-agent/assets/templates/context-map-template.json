@@ -1,0 +1,120 @@
+{
+  "_comment": "context-map-template.json — GRIMSEC Code Understanding Agent (Agent 9). Output schema for --map mode. The agent populates this structure and writes it to code-understanding/context-map.json.",
+  "schema_version": "1.0",
+  "generated_at": "<ISO-8601 UTC timestamp>",
+  "agent": "code-understanding-agent",
+  "suite_position": 9,
+  "target": "<absolute path or repo URL analyzed>",
+  "inventory_context": {
+    "_comment": "Populated from inventory.json (devsecops-repo-analyzer Stage 1) if available",
+    "repo": "<repo name>",
+    "languages": ["go", "typescript"],
+    "frameworks": ["gin", "express"],
+    "summary": "<brief description from Stage 1>"
+  },
+  "stats": {
+    "source_files_scanned": 0,
+    "entry_points_found": 0,
+    "sinks_found": 0,
+    "critical_sinks": 0,
+    "high_sinks": 0,
+    "medium_sinks": 0,
+    "unchecked_flow_candidates": 0,
+    "confirmed_exploitable_flows": 0
+  },
+  "entry_points": [
+    {
+      "id": "ep-001",
+      "label": "<entry point type, e.g. gin_route, grpc_server, mq_kafka_consumer>",
+      "method": "<HTTP method or N/A>",
+      "path": "<route path, topic name, or N/A>",
+      "file": "<relative file path>",
+      "line": 0,
+      "snippet": "<code snippet up to 200 chars>",
+      "language": "<go|typescript|python|rust|java|unknown>",
+      "framework": "<gin|express|fastapi|axum|spring|kafka|N/A>",
+      "trust_boundary": "<external→app|app→db|service→service|authenticated|unauthenticated|admin|user>",
+      "auth_required": "<true|false|unknown>",
+      "attacker_controlled_inputs": [
+        {
+          "name": "<variable or field name>",
+          "source": "<query_param|path_param|request_body|header|cookie|env_var|mq_payload|cli_arg>",
+          "type": "<string|int|bytes|struct|any>",
+          "notes": "<any relevant notes about how this input is used>"
+        }
+      ],
+      "downstream_functions": [
+        "<function name called by this handler>"
+      ]
+    }
+  ],
+  "dangerous_sinks": [
+    {
+      "id": "sink-001",
+      "label": "<sink type, e.g. sql_raw_query, exec_go, fs_open_go>",
+      "vulnerability_class": "<SQLi|CMDi|PathTraversal|SSRF|XSS|Deserialization|WeakCrypto|AuthBypass>",
+      "file": "<relative file path>",
+      "line": 0,
+      "snippet": "<code snippet up to 200 chars>",
+      "language": "<go|typescript|python|rust|java|unknown>",
+      "risk": "<CRITICAL|HIGH|MEDIUM|LOW>",
+      "tainted_variables": ["<variable names that carry attacker-controlled data at this sink>"],
+      "notes": "<any additional context>"
+    }
+  ],
+  "trust_boundaries": [
+    {
+      "id": "tb-001",
+      "type": "<external→app|app→db|service→service|authenticated|unauthenticated|admin|user>",
+      "description": "<human-readable description>",
+      "enforced_by": "<middleware name, auth check, or N/A>",
+      "entry_point_ids": ["ep-001"],
+      "notes": "<gaps or weaknesses in boundary enforcement>"
+    }
+  ],
+  "unchecked_flow_candidates": [
+    {
+      "id": "flow-001",
+      "entry_point_id": "ep-001",
+      "sink_id": "sink-001",
+      "file": "<relative file path, if same file — else cross-file>",
+      "entry_line": 0,
+      "sink_line": 0,
+      "status": "<UNCHECKED|PARTIAL|SANITIZED|NEEDS_TRACE>",
+      "sanitization_observed": "<description of any sanitization found between entry and sink, or null>",
+      "preconditions": ["<conditions that must hold for taint to reach sink>"],
+      "notes": "<agent notes on this flow>",
+      "recommend_trace": true
+    }
+  ],
+  "confirmed_flows": [
+    {
+      "_comment": "Populated after --trace mode confirms exploitability",
+      "id": "cflow-001",
+      "entry_point_id": "ep-001",
+      "sink_id": "sink-001",
+      "trace_file": "code-understanding/flow-traces/flow-trace-<id>.json",
+      "status": "<EXPLOITABLE|CONDITIONAL|BLOCKED>",
+      "exploit_preconditions": ["<what must be true to exploit>"],
+      "severity": "<CRITICAL|HIGH|MEDIUM|LOW>",
+      "cwe": "<CWE-89|CWE-78|CWE-22|CWE-918|CWE-79|CWE-502|CWE-327|CWE-287>",
+      "summary": "<one-sentence description of the vulnerability>",
+      "recommendation": "<one-sentence remediation>"
+    }
+  ],
+  "attack_surface_summary": {
+    "overall_risk": "<CRITICAL|HIGH|MEDIUM|LOW>",
+    "highest_risk_entry_points": ["ep-001"],
+    "highest_risk_sinks": ["sink-001"],
+    "key_findings": [
+      "<bullet finding 1>",
+      "<bullet finding 2>"
+    ],
+    "recommended_traces": ["ep-001 → sink-001", "ep-002 → sink-003"],
+    "feeds_into": {
+      "stage4_reachability": "code-understanding/context-map.json",
+      "exploit_validation": "code-understanding/flow-traces/",
+      "executive_reporting": "code-understanding/context-map.json"
+    }
+  }
+}
